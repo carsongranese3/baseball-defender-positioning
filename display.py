@@ -4,143 +4,119 @@ import matplotlib.pyplot as plt
 import numpy as np
 from optimizer import transform_coordinates, weighted_constrained_kmeans
 
-# --- 1. UI & Navigation Helpers ---
-
 def list_folders(directory):
-    """Lists directories (batters or pitchers) alphabetically."""
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-        return []
+    if not os.path.exists(directory): os.makedirs(directory)
     return sorted([d for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))])
 
 def draw_field(ax):
-    """Draws professional diamond geometry, bases, and outfield grass line."""
-    # Foul Lines & Diamond
+    """Draws diamond, foul lines, and infield grass arc."""
     ax.plot([0, 63.6, 0, -63.6, 0], [0, 63.6, 127.3, 63.6, 0], color='black', lw=2) 
     ax.plot([0, 450], [0, 450], color='black', alpha=0.3)
     ax.plot([0, -450], [0, 450], color='black', alpha=0.3)
     
-    # Infield Grass Arc
+    # Infield Arc (95ft from the mound)
     theta = np.linspace(0, np.pi, 100)
     x_arc, y_arc = 95 * np.cos(theta), 60.5 + 95 * np.sin(theta)
     valid = y_arc >= np.abs(x_arc)
     ax.plot(x_arc[valid], y_arc[valid], color='brown', ls='--', lw=2)
     
-    # Bases (Red Diamonds)
-    ax.scatter([0, 63.6, 0, -63.6], [0, 63.6, 127.3, 63.6], 
-               c='red', s=80, marker='D', edgecolors='black', zorder=5)
-
-# --- 2. Main Matchup Logic ---
+    ax.scatter([0, 63.6, 0, -63.6], [0, 63.6, 127.3, 63.6], c='red', s=80, marker='D', edgecolors='black', zorder=5)
 
 def main():
-    # A. Selection UI
-    batters = list_folders("Batters")
-    pitchers = list_folders("Pitchers")
-    
-    if not batters or not pitchers:
-        return print("Error: Ensure data exists in /Batters and /Pitchers.")
+    batters, pitchers = list_folders("Batters"), list_folders("Pitchers")
+    if not batters or not pitchers: return print("Missing data in /Batters or /Pitchers.")
 
-    print("\n--- Available Batters ---")
+    print("\n--- Matchup Selection ---")
     for i, b in enumerate(batters): print(f" [{i}] {b.replace('_', ' ').title()}")
-    b_idx = int(input("Select Batter Number: "))
-    selected_batter = batters[b_idx]
+    selected_batter = batters[int(input("Select Batter #: "))]
 
-    print("\n--- Available Pitchers ---")
     for i, p in enumerate(pitchers): print(f" [{i}] {p.replace('_', ' ').title()}")
-    p_idx = int(input("Select Pitcher Number: "))
-    selected_pitcher = pitchers[p_idx]
+    selected_pitcher = pitchers[int(input("Select Pitcher #: "))]
 
-    # B. Load Pitcher Arsenal (for weighting)
+    print("\n--- Game State Configuration ---")
+    outs = int(input("Outs (0, 1, 2): "))
+    runners = input("Runners on base (None, 1, 2, 3, 12, 13, 23, 123): ").strip()
+    inning = int(input("Inning: "))
+
     p_path = os.path.join("Pitchers", selected_pitcher)
-    arsenal_path = os.path.join(p_path, "pitches.csv")
-    
-    if not os.path.exists(arsenal_path):
-        return print(f"Error: Missing arsenal summary for {selected_pitcher}. Run get_pitcher_data.py.")
-    
-    arsenal_df = pd.read_csv(arsenal_path)
-    arsenal_dict = arsenal_df.set_index('pitch_type').to_dict('index')
+    arsenal_dict = pd.read_csv(os.path.join(p_path, "pitches.csv")).set_index('pitch_type').to_dict('index')
 
-    # C. Load Batter Data
     b_path = os.path.join("Batters", selected_batter)
     b_files = [f for f in os.listdir(b_path) if f.endswith('.csv')]
-    raw_df = pd.concat([pd.read_csv(os.path.join(b_path, f)) for f in b_files], ignore_index=True)
-    df = transform_coordinates(raw_df.dropna(subset=['hc_x', 'hc_y']))
+    df = pd.concat([pd.read_csv(os.path.join(b_path, f)) for f in b_files], ignore_index=True)
+    df = transform_coordinates(df.dropna(subset=['hc_x', 'hc_y']))
 
-    # D. Probabilistic Weighting System
-    # 1. Look for same pitch types
-    # 2. Weight by Pitcher Usage %
-    # 3. Weight by Velocity Similarity (Gaussian Decay)
     def calculate_weight(row):
         p_type = row['pitch_type']
         if p_type not in arsenal_dict: return 0 
-        
         freq_w = arsenal_dict[p_type]['Usage_%'] / 100
-        target_vel = arsenal_dict[p_type]['Avg_Vel']
-        actual_vel = row['release_speed']
-        
-        # Gaussian Bell Curve (Standard Deviation = 4mph)
-        vel_w = np.exp(-( (target_vel - actual_vel)**2 ) / (2 * 4**2))
+        vel_w = np.exp(-( (arsenal_dict[p_type]['Avg_Vel'] - row['release_speed'])**2 ) / (2 * 4**2))
         return freq_w * vel_w
 
     df['matchup_weight'] = df.apply(calculate_weight, axis=1)
-    df_weighted = df[df['matchup_weight'] > 0.05].copy() # Filter low-relevance hits
+    df_weighted = df[df['matchup_weight'] > 0.05].copy()
 
-    if df_weighted.empty:
-        return print("No relevant matchup data found between this batter and pitcher's arsenal.")
+    if_gravity = {}
+    if_depth_multiplier = 1.0
+    of_depth_boost = 0
+    first_base_bag = [63.6, 63.6]
+    
+    if '1' in runners:
+        print(">> STRATEGY: Holding Runner - 1B pinned to bag.")
+        if_gravity[3] = (first_base_bag, 0.95)
+    else:
+        if_gravity[3] = (first_base_bag, 0.25)
 
-    # E. Segmentation & Weighted K-Means
-    if_df = df_weighted[(df_weighted['dist'] < 220) & (df_weighted['dist'] > 45)]
+    if '1' in runners and outs < 2:
+        print(">> STRATEGY: Double Play Depth - Mid-Infield pinching.")
+        if_gravity[1] = ([0, 127.3], 0.35) 
+        if_gravity[2] = ([0, 127.3], 0.35)
+
+    if '3' in runners and outs < 2 and inning >= 7:
+        print(">> STRATEGY: Infield IN - Protecting Home.")
+        if_depth_multiplier = 0.82
+
+    if outs == 2 and inning >= 7:
+        print(">> STRATEGY: No Doubles - Deep Outfield.")
+        of_depth_boost = 25
+
+    if_raw = df_weighted[(df_weighted['dist'] < 220) & (df_weighted['dist'] > 45)]
+    if_df = if_raw[(if_raw['events'] != 'pop_out') & (if_raw['launch_angle'] < 50)].copy()
     of_df = df_weighted[df_weighted['dist'] >= 220]
 
-    # Infield (Fixed Battery Points: Pitcher/Catcher)
+    # --- UPDATED OPTIMIZATION CALL (Notice is_infield=True) ---
     if len(if_df) > 4:
         if_centroids = weighted_constrained_kmeans(
-            if_df[['x', 'y']].values, if_df['matchup_weight'].values, [[0, 60.5], [0, -2]], 4
+            if_df[['x', 'y']].values, 
+            if_df['matchup_weight'].values, 
+            [[0, 60.5], [0, -2]], 
+            4, 
+            situational_gravity=if_gravity,
+            is_infield=True   # <--- THE SHIFT BAN TOGGLE
         )
+        if_centroids[2:] *= if_depth_multiplier
     else:
-        # Fallback if IF data is sparse
-        if_centroids = np.array([[0, 60.5], [0, -2], [-30, 150], [30, 150], [-60, 110], [60, 110]])
-
-    # Outfield (No Fixed Points)
+        # Fallback legal positions
+        if_centroids = np.array([[0, 60.5], [0, -2], [-40, 110], [-15, 120], [15, 120], [40, 110]])
+    
     if len(of_df) >= 3:
-        of_centroids = weighted_constrained_kmeans(
-            of_df[['x', 'y']].values, of_df['matchup_weight'].values, [], 3
-        )
+        of_centroids = weighted_constrained_kmeans(of_df[['x', 'y']].values, of_df['matchup_weight'].values, [], 3)
+        of_centroids[:, 1] += of_depth_boost
     else:
-        # Standard OF positioning if data is sparse
         of_centroids = np.array([[150, 300], [0, 350], [-150, 300]])
 
-    # F. Final Visualization
     fig, ax = plt.subplots(figsize=(8, 7))
-    ax.set_aspect('equal')
-    draw_field(ax)
+    ax.set_aspect('equal'); draw_field(ax)
     
-    # Cursor distance measurement tool
-    def format_coord(x, y):
-        dist = np.sqrt(x**2 + y**2)
-        return f'x={x:.1f}, y={y:.1f} | Dist: {dist:.1f} ft'
-    ax.format_coord = format_coord
-
-    # Plot hits with transparency reflecting their weighting importance
-    # Hits that match the pitcher's arsenal better will appear more solid
-    ax.scatter(if_df['x'], if_df['y'], c='green', alpha=if_df['matchup_weight'].clip(0, 1) * 0.4, s=20, label='IF Potential')
-    ax.scatter(of_df['x'], of_df['y'], c='blue', alpha=of_df['matchup_weight'].clip(0, 1) * 0.2, s=25, label='OF Potential')
-
-    # Draw Optimal Stars
-    # Red for Infielders, Dark Blue for Outfielders
-    ax.scatter(if_centroids[2:, 0], if_centroids[2:, 1], c='red', s=250, marker='*', 
-               label='Weighted IF', edgecolors='white', zorder=10)
-    ax.scatter(of_centroids[:, 0], of_centroids[:, 1], c='darkblue', s=250, marker='*', 
-               label='Weighted OF', edgecolors='white', zorder=10)
+    ax.scatter(if_df['x'], if_df['y'], c='green', alpha=if_df['matchup_weight'].clip(0, 1) * 0.4, s=20)
+    ax.scatter(of_df['x'], of_df['y'], c='blue', alpha=of_df['matchup_weight'].clip(0, 1) * 0.2, s=25)
     
-    # Static Battery Markers (Squares)
-    ax.scatter(if_centroids[:2, 0], if_centroids[:2, 1], c='black', s=60, marker='s', label='P/C', zorder=20)
+    ax.scatter(if_centroids[2:, 0], if_centroids[2:, 1], c='red', s=250, marker='*', edgecolors='white', zorder=10, label="Optimal IF")
+    ax.scatter(of_centroids[:, 0], of_centroids[:, 1], c='darkblue', s=250, marker='*', edgecolors='white', zorder=10, label="Optimal OF")
+    ax.scatter(if_centroids[:2, 0], if_centroids[:2, 1], c='black', s=60, marker='s', zorder=20, label="P/C")
 
-    # UI Finishing Touches
-    plt.title(f"Weighted Probabilistic Matchup:\n{selected_batter.title()} vs {selected_pitcher.title()}", fontsize=12)
-    plt.xlim(-250, 250); plt.ylim(-20, 450)
+    plt.title(f"{selected_batter.title()} vs {selected_pitcher.title()}\nMLB Legal Shifts | Runners {runners} | Outs {outs}", fontsize=11)
     plt.legend(loc='upper right', fontsize='x-small', framealpha=0.7)
-    plt.tight_layout()
     plt.show()
 
 if __name__ == "__main__":
