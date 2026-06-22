@@ -107,7 +107,21 @@ def main():
 
     fig, ax = plt.subplots(figsize=(8, 7))
     ax.set_aspect('equal'); draw_field(ax)
-    
+
+    # Highlight any base that currently has a runner on it
+    base_coords = {'1': [63.6, 63.6], '2': [0, 127.3], '3': [-63.6, 63.6]}
+    occupied = [(num, xy) for num, xy in base_coords.items() if num in runners]
+    if occupied:
+        rx = [xy[0] for _, xy in occupied]
+        ry = [xy[1] for _, xy in occupied]
+        # Hollow ring so a fielder pinned to the same bag (e.g. 1B holding a
+        # runner) stays visible through the center instead of being painted over.
+        ax.scatter(rx, ry, facecolors='none', s=520, marker='o', edgecolors='gold',
+                   linewidths=2.5, zorder=22, label="Runner On Base")
+        for num, (bx, by) in occupied:
+            ax.annotate(f"R{num}", (bx, by + 14), color='darkgoldenrod', fontsize=7,
+                        fontweight='bold', ha='center', va='center', zorder=23)
+
     ax.scatter(if_df['x'], if_df['y'], c='green', alpha=if_df['matchup_weight'].clip(0, 1) * 0.4, s=20)
     ax.scatter(of_df['x'], of_df['y'], c='blue', alpha=of_df['matchup_weight'].clip(0, 1) * 0.2, s=25)
     
@@ -116,8 +130,29 @@ def main():
     ax.scatter(if_centroids[:2, 0], if_centroids[:2, 1], c='black', s=60, marker='s', zorder=20, label="P/C")
 
     plt.title(f"{selected_batter.title()} vs {selected_pitcher.title()}\nMLB Legal Shifts | Runners {runners} | Outs {outs}", fontsize=11)
-    plt.legend(loc='upper right', fontsize='x-small', framealpha=0.7)
+    plt.legend(loc='upper right', fontsize='x-small', framealpha=0.7,
+               markerscale=0.6, scatterpoints=1)
+
+    enable_scroll_zoom(ax)
     plt.show()
+
+def enable_scroll_zoom(ax, base_scale=1.2):
+    """Scroll wheel zooms in/out, centered on the cursor."""
+    def on_scroll(event):
+        if event.inaxes is not ax:
+            return
+        scale = 1 / base_scale if event.button == 'up' else base_scale
+        cur_xlim, cur_ylim = ax.get_xlim(), ax.get_ylim()
+        xdata, ydata = event.xdata, event.ydata
+        new_w = (cur_xlim[1] - cur_xlim[0]) * scale
+        new_h = (cur_ylim[1] - cur_ylim[0]) * scale
+        relx = (cur_xlim[1] - xdata) / (cur_xlim[1] - cur_xlim[0])
+        rely = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0])
+        ax.set_xlim([xdata - new_w * (1 - relx), xdata + new_w * relx])
+        ax.set_ylim([ydata - new_h * (1 - rely), ydata + new_h * rely])
+        ax.figure.canvas.draw_idle()
+
+    ax.figure.canvas.mpl_connect('scroll_event', on_scroll)
 
 if __name__ == "__main__":
     main()
