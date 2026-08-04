@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# pybaseball writes its HTTP cache outside the repo by default, but pin it
+# here in case cache.enable() is ever pointed at the project directory.
+.pybaseball_cache/
