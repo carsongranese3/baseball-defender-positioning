@@ -3,7 +3,8 @@ import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from optimizer import transform_coordinates, weighted_constrained_kmeans, project_infielder
+from optimizer import (transform_coordinates, weighted_constrained_kmeans,
+                       project_infielder, project_to_fair_territory)
 
 FIRST_BASE_BAG = [63.6, 63.6]
 # A 1B who can't beat the runner to the bag isn't playing first base. Holding a
@@ -150,25 +151,31 @@ def main():
             is_infield=True,   # <--- THE SHIFT BAN TOGGLE
             situational_leash=if_leash
         )
-        # Depth is the y-axis only; scaling x too would drag the middle
-        # infielders toward the centerline.
-        if if_depth_multiplier != 1.0:
-            if_centroids[2:, 1] *= if_depth_multiplier
     else:
         # Fallback legal positions
         if_centroids = np.array([[0, 60.5], [0, -2], [-40, 110], [-15, 120], [15, 120], [40, 110]], dtype=float)
 
-    # Final legality + bag-coverage pass, applied to BOTH branches. The depth
-    # multiplier runs after the optimizer and the fallback positions are
-    # hardcoded, so neither is guaranteed legal or in coverage on its own.
+    # Depth is the y-axis only; scaling x too would drag the middle infielders
+    # toward the centerline. Applied to BOTH branches, so infield-in still
+    # moves people when the matchup has too little data to cluster.
+    if if_depth_multiplier != 1.0:
+        if_centroids[2:, 1] *= if_depth_multiplier
+
+    # Final legality + bag-coverage pass. The depth multiplier runs after the
+    # optimizer and the fallback positions are hardcoded, so neither is
+    # guaranteed legal or in coverage on its own.
     for k in range(4):
         if_centroids[2 + k] = project_infielder(if_centroids[2 + k], k, if_leash.get(k))
 
     if len(of_df) >= 3:
         of_centroids = weighted_constrained_kmeans(of_df[['x', 'y']].values, of_df['matchup_weight'].values, [], 3)
-        of_centroids[:, 1] += of_depth_boost
     else:
-        of_centroids = np.array([[150, 300], [0, 350], [-150, 300]])
+        of_centroids = np.array([[150, 300], [0, 350], [-150, 300]], dtype=float)
+
+    # Same as the infield: the no-doubles boost applies to both branches.
+    of_centroids[:, 1] += of_depth_boost
+    for k in range(len(of_centroids)):
+        of_centroids[k] = project_to_fair_territory(of_centroids[k])
 
     fig, ax = plt.subplots(figsize=(8, 7))
     ax.set_aspect('equal'); draw_field(ax)
@@ -194,7 +201,9 @@ def main():
     ax.scatter(of_centroids[:, 0], of_centroids[:, 1], c='darkblue', s=250, marker='*', edgecolors='white', zorder=10, label="Optimal OF")
     ax.scatter(if_centroids[:2, 0], if_centroids[:2, 1], c='black', s=60, marker='s', zorder=20, label="P/C")
 
-    plt.title(f"{selected_batter.title()} vs {selected_pitcher.title()}\nMLB Legal Shifts | Runners {runners} | Outs {outs}", fontsize=11)
+    batter_name = selected_batter.replace('_', ' ').title()
+    pitcher_name = selected_pitcher.replace('_', ' ').title()
+    plt.title(f"{batter_name} vs {pitcher_name}\nMLB Legal Shifts | Runners {runners} | Outs {outs}", fontsize=11)
     plt.legend(loc='upper right', fontsize='x-small', framealpha=0.7,
                markerscale=0.6, scatterpoints=1)
 

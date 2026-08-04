@@ -13,3 +13,6 @@ env/
 # pybaseball writes its HTTP cache outside the repo by default, but pin it
 # here in case cache.enable() is ever pointed at the project directory.
 .pybaseball_cache/
+
+# Editor
+.vscode/

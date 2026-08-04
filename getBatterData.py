@@ -11,12 +11,36 @@ def main():
     if " " not in name_input: return print("Enter first and last name.")
     first, last = name_input.split(" ", 1)
 
-    # 1. Lookup ID and Debut Year
-    id_results = playerid_lookup(last, first, fuzzy=True)
-    if id_results.empty: return print("Player not found.")
-    
-    p_id = id_results['key_mlbam'].values[0]
-    debut_year = int(id_results['mlb_played_first'].values[0])
+    # 1. Lookup ID and Debut Year. Exact match only - a fuzzy hit would happily
+    # download the wrong player's whole career into a folder named after the
+    # one you asked for, with nothing to tell you it happened.
+    id_results = playerid_lookup(last, first, fuzzy=False)
+    if id_results.empty: return print(f"No exact match for '{name_input}'.")
+
+    match = id_results[
+        (id_results['name_first'].str.lower() == first.lower()) &
+        (id_results['name_last'].str.lower() == last.lower())
+    ]
+    if match.empty: return print(f"No exact match for '{name_input}'.")
+
+    if len(match) > 1:
+        print(f"[!] {len(match)} players named '{name_input}'. Pick one:")
+        for i, row in enumerate(match.itertuples()):
+            print(f"  [{i}] MLBAM {row.key_mlbam}, debut {row.mlb_played_first}")
+        while True:
+            try:
+                raw = input("Select #: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                return print("\nCancelled.")
+            if raw.isdigit() and int(raw) < len(match): break
+            print(f"  [!] Enter a number from 0 to {len(match) - 1}.")
+        match = match.iloc[[int(raw)]]
+
+    if match['mlb_played_first'].isna().values[0]:
+        return print(f"No MLB debut year on record for '{name_input}'.")
+
+    p_id = match['key_mlbam'].values[0]
+    debut_year = int(match['mlb_played_first'].values[0])
     current_year = datetime.now().year
     
     player_slug = f"{first.lower()}_{last.lower()}"
