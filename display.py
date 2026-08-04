@@ -1,12 +1,55 @@
 import os
+import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from optimizer import transform_coordinates, weighted_constrained_kmeans
+from optimizer import transform_coordinates, weighted_constrained_kmeans, project_infielder
+
+FIRST_BASE_BAG = [63.6, 63.6]
+# A 1B who can't beat the runner to the bag isn't playing first base. Holding a
+# runner means a foot on it; otherwise he can roam, but only this far. 30ft also
+# keeps him on the dirt for free - the bag is 63.7ft from the mound, so the
+# leash tops out at 93.7ft, inside the 95ft grass line.
+FIRST_BASE_HOLD_LEASH = 3.0
+FIRST_BASE_COVER_LEASH = 30.0
 
 def list_folders(directory):
     if not os.path.exists(directory): os.makedirs(directory)
     return sorted([d for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))])
+
+def ask(prompt):
+    """input() that exits cleanly on Ctrl-C / Ctrl-D instead of a traceback."""
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        sys.exit(0)
+
+def ask_choice(prompt, options):
+    """Re-prompts until the user picks a valid index. isdigit() also rejects
+    negatives, which would otherwise index from the end of the list silently."""
+    while True:
+        raw = ask(prompt)
+        if raw.isdigit() and int(raw) < len(options):
+            return options[int(raw)]
+        print(f"  [!] Enter a number from 0 to {len(options) - 1}.")
+
+def ask_int(prompt, low, high):
+    while True:
+        raw = ask(prompt)
+        if raw.isdigit() and low <= int(raw) <= high:
+            return int(raw)
+        print(f"  [!] Enter a whole number from {low} to {high}.")
+
+def ask_runners(prompt):
+    """Accepts None/empty or any combination of 1/2/3, in any order."""
+    while True:
+        raw = ask(prompt)
+        if raw.lower() in ("", "none", "0"):
+            return "None"
+        if all(c in "123" for c in raw):
+            return "".join(sorted(set(raw)))
+        print("  [!] Enter None, or any combination of 1/2/3 (e.g. 13).")
 
 def draw_field(ax):
     """Draws diamond, foul lines, and infield grass arc."""
@@ -28,21 +71,28 @@ def main():
 
     print("\n--- Matchup Selection ---")
     for i, b in enumerate(batters): print(f" [{i}] {b.replace('_', ' ').title()}")
-    selected_batter = batters[int(input("Select Batter #: "))]
+    selected_batter = ask_choice("Select Batter #: ", batters)
 
     for i, p in enumerate(pitchers): print(f" [{i}] {p.replace('_', ' ').title()}")
-    selected_pitcher = pitchers[int(input("Select Pitcher #: "))]
+    selected_pitcher = ask_choice("Select Pitcher #: ", pitchers)
 
     print("\n--- Game State Configuration ---")
-    outs = int(input("Outs (0, 1, 2): "))
-    runners = input("Runners on base (None, 1, 2, 3, 12, 13, 23, 123): ").strip()
-    inning = int(input("Inning: "))
+    outs = ask_int("Outs (0, 1, 2): ", 0, 2)
+    runners = ask_runners("Runners on base (None, 1, 2, 3, 12, 13, 23, 123): ")
+    inning = ask_int("Inning: ", 1, 30)
 
     p_path = os.path.join("Pitchers", selected_pitcher)
-    arsenal_dict = pd.read_csv(os.path.join(p_path, "pitches.csv")).set_index('pitch_type').to_dict('index')
+    arsenal_path = os.path.join(p_path, "pitches.csv")
+    if not os.path.exists(arsenal_path):
+        return print(f"[!] No pitches.csv for {selected_pitcher}. Re-run the pitcher "
+                     f"downloader (menu option 2) to build the arsenal summary.")
+    arsenal_dict = pd.read_csv(arsenal_path).set_index('pitch_type').to_dict('index')
 
     b_path = os.path.join("Batters", selected_batter)
     b_files = [f for f in os.listdir(b_path) if f.endswith('.csv')]
+    if not b_files:
+        return print(f"[!] No season data for {selected_batter}. Re-run the batter "
+                     f"downloader (menu option 1).")
     df = pd.concat([pd.read_csv(os.path.join(b_path, f)) for f in b_files], ignore_index=True)
     df = transform_coordinates(df.dropna(subset=['hc_x', 'hc_y']))
 
@@ -59,13 +109,16 @@ def main():
     if_gravity = {}
     if_depth_multiplier = 1.0
     of_depth_boost = 0
-    first_base_bag = [63.6, 63.6]
-    
+    first_base_bag = FIRST_BASE_BAG
+    if_leash = {}
+
     if '1' in runners:
         print(">> STRATEGY: Holding Runner - 1B pinned to bag.")
         if_gravity[3] = (first_base_bag, 0.95)
+        if_leash[3] = (first_base_bag, FIRST_BASE_HOLD_LEASH)
     else:
         if_gravity[3] = (first_base_bag, 0.25)
+        if_leash[3] = (first_base_bag, FIRST_BASE_COVER_LEASH)
 
     if '1' in runners and outs < 2:
         print(">> STRATEGY: Double Play Depth - Mid-Infield pinching.")
@@ -81,7 +134,9 @@ def main():
         of_depth_boost = 25
 
     if_raw = df_weighted[(df_weighted['dist'] < 220) & (df_weighted['dist'] > 45)]
-    if_df = if_raw[(if_raw['events'] != 'pop_out') & (if_raw['launch_angle'] < 50)].copy()
+    # Statcast has no 'pop_out' event - popups come through as field_out with
+    # bb_type 'popup' - so the launch angle cut is what actually excludes them.
+    if_df = if_raw[if_raw['launch_angle'] < 50].copy()
     of_df = df_weighted[df_weighted['dist'] >= 220]
 
     # --- UPDATED OPTIMIZATION CALL (Notice is_infield=True) ---
@@ -92,13 +147,23 @@ def main():
             [[0, 60.5], [0, -2]], 
             4, 
             situational_gravity=if_gravity,
-            is_infield=True   # <--- THE SHIFT BAN TOGGLE
+            is_infield=True,   # <--- THE SHIFT BAN TOGGLE
+            situational_leash=if_leash
         )
-        if_centroids[2:] *= if_depth_multiplier
+        # Depth is the y-axis only; scaling x too would drag the middle
+        # infielders toward the centerline.
+        if if_depth_multiplier != 1.0:
+            if_centroids[2:, 1] *= if_depth_multiplier
     else:
         # Fallback legal positions
-        if_centroids = np.array([[0, 60.5], [0, -2], [-40, 110], [-15, 120], [15, 120], [40, 110]])
-    
+        if_centroids = np.array([[0, 60.5], [0, -2], [-40, 110], [-15, 120], [15, 120], [40, 110]], dtype=float)
+
+    # Final legality + bag-coverage pass, applied to BOTH branches. The depth
+    # multiplier runs after the optimizer and the fallback positions are
+    # hardcoded, so neither is guaranteed legal or in coverage on its own.
+    for k in range(4):
+        if_centroids[2 + k] = project_infielder(if_centroids[2 + k], k, if_leash.get(k))
+
     if len(of_df) >= 3:
         of_centroids = weighted_constrained_kmeans(of_df[['x', 'y']].values, of_df['matchup_weight'].values, [], 3)
         of_centroids[:, 1] += of_depth_boost

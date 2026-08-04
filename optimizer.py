@@ -17,14 +17,37 @@ def project_to_fair_territory(point):
         new_y = (y - x) / 2
         return np.array([new_x, new_y])
 
-def project_infielder(point, fielder_index):
+def clamp_to_anchor(point, anchor, max_dist):
+    """
+    Keeps a fielder within max_dist feet of an anchor point - used for bag
+    coverage, where hit density is irrelevant if you can't beat the runner
+    to the base. Pulls straight back along the line to the anchor.
+    """
+    p = np.asarray(point, dtype=float)
+    a = np.asarray(anchor, dtype=float)
+    offset = p - a
+    dist = np.sqrt(offset[0]**2 + offset[1]**2)
+    if dist <= max_dist or dist == 0:
+        return p
+    return a + offset * (max_dist / dist)
+
+def project_infielder(point, fielder_index, leash=None):
     """
     Enforces the MLB Anti-Shift Rules:
     1. Two fielders strictly on the left side of 2B, two on the right.
     2. All fielders must be on the infield dirt (<= 95ft from the mound).
+    3. Optional leash=(anchor, max_dist): fielder must stay within max_dist
+       of anchor. Applied first so the legality rules always get the last
+       word. For a leash on a base that is already on the dirt this is
+       order-safe: the dirt clamp can only pull a fielder closer to the
+       mound, and the foul-line projection is orthogonal onto a line
+       through the bag, so neither can push him back outside the leash.
     """
     x, y = point
-    
+
+    if leash is not None:
+        x, y = clamp_to_anchor([x, y], leash[0], leash[1])
+
     # RULE 1: Left/Right Boundary (X-Axis Split)
     # Indices 0 and 1 (3B, SS) must stay on the Left (Negative X)
     if fielder_index in [0, 1]:
@@ -48,7 +71,7 @@ def project_infielder(point, fielder_index):
     # Finally, ensure they didn't get pushed into foul territory down the lines
     return project_to_fair_territory([x, y])
 
-def weighted_constrained_kmeans(data, weights, fixed_centroids, n_variable, situational_gravity=None, max_iter=100, is_infield=False):
+def weighted_constrained_kmeans(data, weights, fixed_centroids, n_variable, situational_gravity=None, max_iter=100, is_infield=False, situational_leash=None):
     if len(data) == 0:
         return np.vstack([fixed_centroids, np.zeros((n_variable, 2))])
 
@@ -89,9 +112,10 @@ def weighted_constrained_kmeans(data, weights, fixed_centroids, n_variable, situ
                     target, strength = situational_gravity[k]
                     proposed = (proposed * (1 - strength)) + (np.array(target) * strength)
                 
-                # APPLY LEGAL BOUNDARIES
+                # APPLY LEGAL BOUNDARIES (+ any bag-coverage leash)
                 if is_infield:
-                    new_variable_centroids.append(project_infielder(proposed, k))
+                    leash = situational_leash.get(k) if situational_leash else None
+                    new_variable_centroids.append(project_infielder(proposed, k, leash))
                 else:
                     new_variable_centroids.append(project_to_fair_territory(proposed))
             else:

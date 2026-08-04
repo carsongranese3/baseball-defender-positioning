@@ -96,8 +96,13 @@ def main():
         print(f"  - Fetching {year} data...")
         try:
             data = statcast_pitcher(f'{year}-03-15', f'{year}-11-15', player_id=p_id)
-            if not data.empty: data.to_csv(file_path, index=False)
-        except Exception: pass
+            if not data.empty:
+                data.to_csv(file_path, index=False)
+                print(f"    -> Saved {len(data)} pitches")
+            else:
+                print(f"    -> No pitches found.")
+        except Exception as e:
+            print(f"    -> Error fetching {year}: {e}")
 
     generate_pitch_arsenal(pitcher_dir)
 
