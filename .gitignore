@@ -16,3 +16,9 @@ env/
 
 # Editor
 .vscode/
+
+# Downloaded Statcast data. This is MLB Advanced Media's, not ours - the
+# repo ships the downloaders, not the data. Run main.py options 1 and 2 to
+# populate these yourself.
+Batters/
+Pitchers/
