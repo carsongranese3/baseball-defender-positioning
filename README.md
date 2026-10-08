@@ -121,6 +121,13 @@ No database, no server, no config. The plot window supports cursor-centered scro
 - **Pitch types missing from the arsenal map are dropped silently.** An unrecognized `pitch_name` falls through as its full name, never matches the batter file's abbreviation, and those batted balls get weight zero with no warning.
 - **Career data is pooled flat.** A hitter's 2016 batted balls count the same as his 2025 ones — no recency weighting, no park adjustment, no platoon split.
 
+## How this was built
+
+This was one of my first projects built with AI assistance. I chose the approach: weighting
+batted balls by the pitcher's arsenal, enforcing the anti-shift rules inside the clustering
+loop instead of afterward, and the situational adjustments. I used AI coding tools to help
+write and debug the implementation, and later to add the tests and clean up the repo.
+
 ---
 
 *Statcast data is property of MLB Advanced Media. This is a personal project, not affiliated with MLB.*
