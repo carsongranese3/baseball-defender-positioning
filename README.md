@@ -1,5 +1,7 @@
 # Baseball Defender Positioning
 
+[![tests](https://github.com/carsongranese3/baseball-defender-positioning/actions/workflows/tests.yml/badge.svg)](https://github.com/carsongranese3/baseball-defender-positioning/actions/workflows/tests.yml)
+
 Where should the defense stand against *this* hitter facing *this* pitcher?
 
 A Python tool that computes optimal fielder positions for a specific batter-vs-pitcher matchup. It weights a batter's career batted balls by how closely each one resembles the pitches the opposing pitcher actually throws, then places seven fielders with a constrained k-means that enforces the 2023 MLB anti-shift rules.
